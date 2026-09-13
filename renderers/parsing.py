@@ -77,7 +77,8 @@ def _coerce_arg_value(
       The ``used_json_fallback`` flag is ``True`` only when the schema
       does NOT permit a string — i.e. the fallback is truly suspect.
 
-    Union types (``anyOf``/``oneOf``) that include ``"string"`` alongside
+    Nullable strings preserve text except the literal ``null``, which remains
+    ``None``. Other union types (``anyOf``/``oneOf``) with ``"string"`` alongside
     other types still attempt ``json.loads`` first so an explicit
     integer / bool can parse; the string branch wins as fallback, and
     landing there is expected — not a malformed-JSON signal.
@@ -87,7 +88,18 @@ def _coerce_arg_value(
         declared = param_schema.get("type")
         if declared == "string" or declared == ["string"]:
             return text, False
-        for branch in param_schema.get("anyOf") or param_schema.get("oneOf") or []:
+        alternatives = param_schema.get("anyOf") or param_schema.get("oneOf") or []
+        alternative_types = [
+            branch.get("type") if isinstance(branch, dict) else None
+            for branch in alternatives
+        ]
+        nullable_string_types = (["string", "null"], ["null", "string"])
+        if (
+            declared in nullable_string_types
+            or alternative_types in nullable_string_types
+        ):
+            return (None if text.strip() == "null" else text), False
+        for branch in alternatives:
             if isinstance(branch, dict) and branch.get("type") == "string":
                 string_is_allowed = True
                 break
@@ -511,20 +523,20 @@ def _parse_glm_tool_calls(
                 j = first_ak
                 while j < len(block):
                     if block[j] == ak_id:
-                        ake = _find(block, ake_id, j + 1)
-                        if ake == -1:
+                        ake = _find_any(block, {ak_id, ake_id}, j + 1)
+                        if ake == -1 or block[ake] != ake_id:
                             structure_broke = True
                             break
                         key = _decode(tokenizer, block[j + 1 : ake]).strip()
-                        av = _find(block, av_id, ake + 1)
-                        if av == -1:
+                        av = _find_any(block, {ak_id, av_id}, ake + 1)
+                        if av == -1 or block[av] != av_id:
                             structure_broke = True
                             break
                         ave = _find(block, ave_id, av + 1)
                         if ave == -1:
                             structure_broke = True
                             break
-                        val_text = _decode(tokenizer, block[av + 1 : ave]).strip()
+                        val_text = _decode(tokenizer, block[av + 1 : ave])
                         value, used_fallback = _coerce_arg_value(
                             val_text, params.get(key)
                         )
